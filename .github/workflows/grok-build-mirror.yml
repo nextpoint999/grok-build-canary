@@ -140,10 +140,11 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
           mkdir -p "$RUNNER_TEMP/protoc"
           python -m zipfile -e "$RUNNER_TEMP/protoc.zip" "$RUNNER_TEMP/protoc"
-          PROTOC_BIN="$RUNNER_TEMP/protoc/bin"
-          echo "PROTOC=$PROTOC_BIN/protoc.exe" >> "$GITHUB_ENV"
-          echo "$PROTOC_BIN" >> "$GITHUB_PATH"
-          export PATH="$PROTOC_BIN:$PATH"
+          # 用 cygpath -w 转成真实 Windows 反斜杠路径(避免 /tmp 或 /c/... 在 GITHUB_PATH 里解析错)
+          PROTOC_BIN_WIN="$(cygpath -w "$RUNNER_TEMP/protoc/bin")"
+          echo "PROTOC=$PROTOC_BIN_WIN\\protoc.exe" >> "$GITHUB_ENV"
+          echo "$PROTOC_BIN_WIN" >> "$GITHUB_PATH"
+          export PATH="$PROTOC_BIN_WIN:$PATH"
           if ! choco install nasm -y --no-progress; then
             echo "::warning::choco nasm 失败，改为直接下载"
             curl -fsSL -o "$RUNNER_TEMP/nasm.zip" https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip
@@ -173,8 +174,12 @@ jobs:
           # 里各平台的必需链接标志 (macOS -undefined dynamic_lookup, Windows +crt-static 等)。
           # CLI 二进制 `xai-grok-pager` 由包 `xai-grok-pager-bin` 提供(其 src/main.rs 是唯一 [[bin]])。
           if ! cargo build --release -p xai-grok-pager-bin --target "${{ matrix.target }}" 2>/tmp/build-err.log; then
-            ERR="$(grep -aE '^error|error\[|failed to run|could not compile|panicked|LNK[0-9]+|fatal error|No space|out of memory|OOM|unsupported|not (found|exist)' /tmp/build-err.log | tail -10 | tr '\n' '~' | cut -c1-1500)"
-            [ -n "$ERR" ] || ERR="$(tail -20 /tmp/build-err.log | tr '\n' '~' | cut -c1-1500)"
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              echo "::error::PROTOC_ENV=$(echo "${PROTOC:-unset}" | tr '\n' '~' | cut -c1-300)"
+              echo "::error::PROTOC_EXISTS=$( [ -f "${PROTOC:-}" ] && echo yes || echo no )"
+            fi
+            ERR="$(grep -aA4 'panicked at' /tmp/build-err.log | tail -8 | tr '\n' '~' | cut -c1-1800)"
+            [ -n "$ERR" ] || ERR="$(tail -20 /tmp/build-err.log | tr '\n' '~' | cut -c1-1800)"
             echo "::error::BUILD_FAIL ${{ matrix.target }} :: ${ERR}"
             { echo "## build fail ${{ matrix.target }} run=$GITHUB_RUN_ID"; echo; grep -aE 'error|failed|panicked|LNK|fatal|No space|OOM|not found' /tmp/build-err.log | tail -40; echo "--- tail ---"; tail -20 /tmp/build-err.log; } > /tmp/diag.txt
             mkdir -p "$GITHUB_WORKSPACE/.diag" && cp /tmp/diag.txt "$GITHUB_WORKSPACE/.diag/build-${{ matrix.target }}.txt" 2>/dev/null || true
