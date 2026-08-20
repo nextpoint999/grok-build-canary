@@ -127,26 +127,52 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          set -euo pipefail
           curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
           mkdir -p /tmp/protoc
           python -m zipfile -e /tmp/protoc.zip /tmp/protoc
+          # GITHUB_PATH 只对后续步骤生效；本步骤内必须直接 export
+          export PATH="/tmp/protoc/bin:$PATH"
           echo "/tmp/protoc/bin" >> "$GITHUB_PATH"
-          choco install nasm -y --no-progress || true
+          choco install nasm -y --no-progress || echo "::warning::choco nasm 安装失败，尝试直接使用"
+          export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+          echo "/c/ProgramData/chocolatey/bin" >> "$GITHUB_PATH"
           protoc --version
           nasm -v
       - name: 构建 xai-grok-pager (release)
         shell: bash
         env:
-          RUSTFLAGS: -C strip=symbols
           CARGO_INCREMENTAL: 0
         run: |
           set -euo pipefail
+          # 注意: 不要设 RUSTFLAGS 环境变量 —— 它会整体覆盖上游 .cargo/config.toml
+          # 里各平台的必需链接标志 (macOS -undefined dynamic_lookup, Windows +crt-static 等)
           cargo build --release -p xai-grok-pager --target "${{ matrix.target }}"
+      - name: 收集二进制到 dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXT=""
+          [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          BIN="$(find "$PWD/target" -type f -name "xai-grok-pager${EXT}" -path "*/release/*" | head -1 || true)"
+          if [ -z "$BIN" ]; then
+            echo "::error::二进制未找到 (EXT=${EXT})，target 目录树:"
+            find "$PWD/target" -maxdepth 3 \( -type d -o -type f \) | head -30 || true
+            echo "::error::end"
+            exit 1
+          fi
+          echo "::notice::找到二进制: ${BIN}"
+          mkdir -p dist
+          cp "$BIN" "dist/${{ matrix.asset }}"
+          ls -la dist
+      - name: strip 符号 (仅 Linux)
+        if: runner.os == 'Linux'
+        run: strip -s "dist/${{ matrix.asset }}"
       - name: 上传二进制
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.asset }}
-          path: target/${{ matrix.target }}/release/xai-grok-pager${{ runner.os == 'Windows' && '.exe' || '' }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
   # ── 发布: 汇总 6 平台产物 → release create/refresh + Latest 徽标 ──────────

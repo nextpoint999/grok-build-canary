@@ -10,7 +10,7 @@ xAI [grok-build](https://github.com/xai-org/grok-build)（SpaceXAI 终端编码�
 - **多架构**: linux / darwin / win32 × arm64 / x64，共 6 平台（与上游 npm 平台包一致）
 - **版本**: release tag 与上游 npm 元包版本一致（如 `0.1.220-alpha.4`）；release body 记录上游 commit SHA
 - **自动刷新**: 上游 commit 变化时原位刷新同一 release 的二进制（tag 不变，Latest 徽标不回退）
-- 二进制已 strip（`-C strip=symbols`），体积约为上游原始构建的一半
+- 二进制构建尊重上游 `.cargo/config.toml` 的平台链接标志（Linux 额外 strip 减体积；macOS/Windows 与上游一致不 strip）
 
 ## 安装
 
