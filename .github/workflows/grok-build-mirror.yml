@@ -255,4 +255,10 @@ jobs:
           path: dist
           merge-multiple: true
       - name: 发布 / 刷新 release
-        run: bash scripts/publish.sh
+        run: bash scripts/publish.sh 2>&1 | tee /tmp/publish.out
+      - name: 上传 publish 日志 (失败时诊断用)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: publish-log
+          path: /tmp/publish.out
