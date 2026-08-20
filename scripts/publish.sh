@@ -1,40 +1,35 @@
 #!/usr/bin/env bash
-# 发布或刷新 grok-build 镜像 release（在 GitHub Actions publish job 中运行）。
-#
-# 必需环境变量: GH_REPO TAG VERSION HEAD_SHA HEAD_SHORT HEAD_DATE
-# 可选:         FORCE LATEST UPSTREAM_URL
-# 输入:         dist/ 下 6 个平台二进制（grok-<platform>-<arch>[.exe]）
-#
-# 语义:
-#   - release 不存在 → gh release create（重试 3 次）
-#   - release 已存在 → 删除旧资产 + 上传新资产 + 更新 body（不动 published_at，
-#     Latest 徽标不回退）
-#   - LATEST: auto/set → PATCH make_latest=true 钉住本 release；keep → 不动
-set -euo pipefail
+# 发布/刷新 grok-build 镜像 release —— 纯 curl + GITHUB_TOKEN 直调 GitHub Releases API
+# (不依赖 gh CLI，避免认证/仓库上下文问题)。
+# 环境变量: GH_REPO TAG VERSION HEAD_SHA HEAD_SHORT HEAD_DATE LATEST FORCE UPSTREAM_URL
+# 输入:     dist/ 下 6 个平台二进制
+set -uo pipefail
 
 BIN_DIR="${BIN_DIR:-dist}"
 TAG="${TAG:?TAG required}"
+GH="${GH_REPO:?GH_REPO required}"
 LATEST="${LATEST:-auto}"
-FORCE="${FORCE:-}"
+: "${GITHUB_TOKEN:?GITHUB_TOKEN required}"
+API="https://api.github.com"
+AUTH="Authorization: Bearer ${GITHUB_TOKEN}"
+ACCEPT="Accept: application/vnd.github+json"
+CT="Content-Type: application/json"
+UA="User-Agent: hermes-grok"
 
 cd "$(dirname "$0")/.."
 
-# 1. 校验 6 个平台资产齐全
+echo "== 校验 6 平台资产 =="
 EXPECTED="grok-darwin-arm64 grok-darwin-x64 grok-linux-arm64 grok-linux-x64 grok-win32-arm64.exe grok-win32-x64.exe"
 MISSING=""
-for a in $EXPECTED; do
-  [ -f "$BIN_DIR/$a" ] || MISSING="$MISSING $a"
-done
+for a in $EXPECTED; do [ -f "$BIN_DIR/$a" ] || MISSING="$MISSING $a"; done
 if [ -n "$MISSING" ]; then
-  echo "[error] 缺少平台资产:$MISSING"
+  echo "::error::缺少平台资产:$MISSING"
   ls -la "$BIN_DIR" || true
   exit 1
 fi
 
-# 2. 校验和（只针对文件，find 时不会再扫到目录）
 ( cd "$BIN_DIR" && sha256sum ./grok-* > SHA256SUMS )
 
-# 3. release notes（body 中记录 40 位 commit SHA，detect job 靠它判断是否需要刷新）
 NOTES="$(cat <<EOF
 xAI [grok-build](${UPSTREAM_URL:-https://github.com/xai-org/grok-build}) 的 GitHub Actions 镜像构建 — \`${VERSION}\`
 
@@ -46,51 +41,88 @@ xAI [grok-build](${UPSTREAM_URL:-https://github.com/xai-org/grok-build}) 的 Git
 EOF
 )"
 
-DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef -q '.defaultBranchRef.name')"
+FILES="$(find "$BIN_DIR" -maxdepth 1 -type f | sort)"
+echo "== 待上传文件: =="
+echo "$FILES"
 
-# 4. release 是否存在（带重试，防 GitHub 临时 500）
-RELEASE_EXISTS=""
-for _try in 1 2 3; do
-  if gh release view "$TAG" >/dev/null 2>&1; then RELEASE_EXISTS="yes"; break; fi
-  echo "[warn] gh release view ${TAG} 失败/不存在（第 ${_try} 次）"
-  sleep 5
-done
+api_get() { # $1=url
+  curl -fsS -H "$AUTH" -H "$ACCEPT" -H "$UA" "$1"
+}
+api_post() { # $1=url  $2=body-file(可选)
+  if [ -n "${2:-}" ]; then
+    curl -fsS -X POST -H "$AUTH" -H "$ACCEPT" -H "$CT" -H "$UA" --data-binary "@$2" "$1"
+  else
+    curl -fsS -X POST -H "$AUTH" -H "$ACCEPT" -H "$CT" -H "$UA" -d '{}' "$1"
+  fi
+}
+api_patch() {
+  curl -fsS -X PATCH -H "$AUTH" -H "$ACCEPT" -H "$CT" -H "$UA" --data-binary "@$1" "$2"
+}
+api_delete() {
+  curl -fsS -X DELETE -H "$AUTH" -H "$ACCEPT" -H "$UA" "$1" -o /dev/null
+}
+upload_asset() { # $1=file  $2=upload_url
+  local f="$1" u="$2" name
+  name="$(basename "$f")"
+  curl -fsS -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" \
+       -H "$ACCEPT" -H "$UA" --data-binary "@$f" "${u}?name=${name}" -o /tmp/up.json \
+    || { echo "::error::上传失败 ${name}"; head -c 300 /tmp/up.json 2>/dev/null; return 1; }
+  echo "  上传 ${name} OK"
+}
 
-FILES=$(find "$BIN_DIR" -maxdepth 1 -type f | sort)
-echo "[info] 上传文件:"; echo "$FILES"
+echo "== 获取默认分支 =="
+DEFAULT_BRANCH="$(api_get "$API/repos/$GH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["default_branch"])')"
+echo "default_branch=${DEFAULT_BRANCH}"
 
-if [ -n "$RELEASE_EXISTS" ]; then
-  echo "[info] 刷新已有 release: ${TAG}${FORCE:+ (force)}"
-  gh release view "$TAG" --json assets -q '.assets[].name' | while read -r a; do
-    [ -n "$a" ] && gh release delete-asset "$TAG" "$a" --yes >/dev/null
-  done
-  gh release upload "$TAG" $FILES --clobber
-  gh release edit "$TAG" --notes "$NOTES"
+# 检查 tag 是否已存在
+echo "== 检查 release ${TAG} =="
+REL_JSON=""
+if REL_JSON="$(api_get "$API/repos/$GH/releases/tags/$TAG" 2>/tmp/rel-err)"; then
+  EXISTING=yes
 else
-  echo "[info] 创建新 release: ${TAG}"
-  CREATED=""
-  for _try in 1 2 3; do
-    if gh release create "$TAG" $FILES --target "$DEFAULT_BRANCH" --title "$TAG" --notes "$NOTES"; then
-      CREATED="yes"; break
-    fi
-    echo "[warn] gh release create ${TAG} 失败（第 ${_try} 次），10s 后重试"
-    sleep 10
-  done
-  [ -n "$CREATED" ] || { echo "[error] gh release create 重试 3 次仍失败"; exit 1; }
+  EXISTING=""
+  echo "  (不存在, 将创建)"
 fi
 
-# 5. Latest 徽标
-case "$LATEST" in
-  keep) echo "[info] latest 徽标保持不变" ;;
-  *)
-    REL_ID="$(gh release view "$TAG" --json id -q '.id')"
-    if gh api -X PATCH "repos/${GH_REPO}/releases/${REL_ID}" -f make_latest=true >/dev/null 2>&1; then
-      echo "[info] 已将该 release 设为 Latest"
-    else
-      echo "[warn] make_latest 失败（该 release 为 pre-release/draft 时无法设为 latest）"
-    fi
-    ;;
-esac
+if [ -n "$EXISTING" ]; then
+  echo "== 刷新已有 release ${TAG} =="
+  REL_ID="$(echo "$REL_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  UPLOAD_URL="$(echo "$REL_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"].split("{")[0])')"
+  # 删除旧资产
+  echo "$REL_JSON" | python3 -c 'import json,sys; [print(a["id"], a["name"]) for a in json.load(sys.stdin).get("assets",[])]' | while read -r aid aname; do
+    [ -n "$aid" ] && api_delete "$API/repos/$GH/releases/assets/$aid" && echo "  删除旧资产 ${aname}"
+  done
+  # 更新 body
+  python3 -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<<"$NOTES" > /tmp/body.json
+  api_patch /tmp/body.json "$API/repos/$GH/releases/$REL_ID" >/tmp/patch.json || { echo "::error::PATCH release 失败"; head -c 300 /tmp/patch.json; exit 1; }
+else
+  echo "== 创建新 release ${TAG} =="
+  python3 -c "import json,sys
+body={'tag_name':'$TAG','target_commitish':'$DEFAULT_BRANCH','name':'$TAG','body':open('/dev/stdin').read()}
+print(json.dumps(body))" <<<"$NOTES" > /tmp/create.json
+  api_post "$API/repos/$GH/releases" /tmp/create.json > /tmp/rel.json \
+    || { echo "::error::创建 release 失败"; head -c 300 /tmp/rel.json 2>/dev/null; exit 1; }
+  REL_ID="$(python3 -c 'import json,sys; print(json.load(open("/tmp/rel.json"))["id"])')"
+  UPLOAD_URL="$(python3 -c 'import json,sys; print(json.load(open("/tmp/rel.json"))["upload_url"].split("{")[0])')"
+fi
 
-echo "[done] release ${TAG} 处理完成"
-gh release view "$TAG" --json tagName,assets -q '{tag: .tagName, assets: [.assets[].name]}'
+echo "== 上传资产到 release $REL_ID =="
+for f in $FILES; do
+  upload_asset "$f" "$UPLOAD_URL" || exit 1
+done
+
+echo "== Latest 徽标 =="
+if [ "$LATEST" = "keep" ]; then
+  echo "  保持不变"
+else
+  python3 -c "print('{\"make_latest\":true}')" > /tmp/ml.json
+  if api_patch /tmp/ml.json "$API/repos/$GH/releases/$REL_ID" >/tmp/ml-resp.json 2>/dev/null; then
+    echo "  已设为 Latest"
+  else
+    echo "  (make_latest 不可用/无需)"
+  fi
+fi
+
+echo "== 完成 =="
+api_get "$API/repos/$GH/releases/$REL_ID" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("release:", d["tag_name"], "| assets:", [a["name"] for a in d.get("assets",[])])'
+echo "URL: https://github.com/$GH/releases/tag/$TAG"
