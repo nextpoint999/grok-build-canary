@@ -125,24 +125,31 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: 安装 protoc (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf
+        run: |
+          brew install protobuf
+          # 显式设 PROTOC，build.rs 第一个检查的就是 $PROTOC，避免 PATH 解析问题
+          echo "PROTOC=$(command -v protoc)" >> "$GITHUB_ENV"
+          protoc --version
       - name: 安装 protoc + nasm (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           set -uo pipefail
-          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
-          mkdir -p /tmp/protoc
-          python -m zipfile -e /tmp/protoc.zip /tmp/protoc
-          # GITHUB_PATH 只对后续步骤生效；本步骤内必须直接 export
-          export PATH="/tmp/protoc/bin:$PATH"
-          echo "/tmp/protoc/bin" >> "$GITHUB_PATH"
+          # 用 $RUNNER_TEMP(真实 Windows 路径) 而非 Git Bash 的 /tmp —— /tmp 写入 GITHUB_PATH
+          # 会被解析成错误的 C:\tmp\...；同时显式设 PROTOC 环境变量(build.rs 优先读它)
+          curl -fsSL -o "$RUNNER_TEMP/protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
+          mkdir -p "$RUNNER_TEMP/protoc"
+          python -m zipfile -e "$RUNNER_TEMP/protoc.zip" "$RUNNER_TEMP/protoc"
+          PROTOC_BIN="$RUNNER_TEMP/protoc/bin"
+          echo "PROTOC=$PROTOC_BIN/protoc.exe" >> "$GITHUB_ENV"
+          echo "$PROTOC_BIN" >> "$GITHUB_PATH"
+          export PATH="$PROTOC_BIN:$PATH"
           if ! choco install nasm -y --no-progress; then
             echo "::warning::choco nasm 失败，改为直接下载"
-            curl -fsSL -o /tmp/nasm.zip https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip
-            mkdir -p /tmp/nasm
-            python -m zipfile -e /tmp/nasm.zip /tmp/nasm
-            NASMDIR="$(find /tmp/nasm -maxdepth 2 -type d -name 'nasm-*' | head -1)"
+            curl -fsSL -o "$RUNNER_TEMP/nasm.zip" https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip
+            mkdir -p "$RUNNER_TEMP/nasm"
+            python -m zipfile -e "$RUNNER_TEMP/nasm.zip" "$RUNNER_TEMP/nasm"
+            NASMDIR="$(find "$RUNNER_TEMP/nasm" -maxdepth 2 -type d -name 'nasm-*' | head -1)"
             export PATH="$NASMDIR:$PATH"
             echo "$NASMDIR" >> "$GITHUB_PATH"
           fi
@@ -150,7 +157,7 @@ jobs:
           echo "/c/ProgramData/chocolatey/bin" >> "$GITHUB_PATH"
           protoc --version
           if ! nasm -v; then
-            { echo "**nasm 缺失 run=$GITHUB_RUN_ID ${{ matrix.target }}**"; echo; command -v choco python curl 2>&1; ls /tmp 2>&1 | head; } > /tmp/diag.txt
+            { echo "**nasm 缺失 run=$GITHUB_RUN_ID ${{ matrix.target }}**"; echo; command -v choco python curl 2>&1; ls "$RUNNER_TEMP" 2>&1 | head; } > /tmp/diag.txt
             TR="$(tr '\n' '~' < /tmp/diag.txt | cut -c1-800)"
             echo "::error::NASM_FAIL ${{ matrix.target }} :: ${TR}"
             exit 1
