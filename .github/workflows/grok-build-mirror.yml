@@ -83,6 +83,8 @@ jobs:
     if: needs.detect.outputs.action != 'skip'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
+    env:
+      GH_REPO: ${{ github.repository }}
     strategy:
       fail-fast: false
       matrix:
@@ -150,7 +152,7 @@ jobs:
           if ! nasm -v; then
             { echo "**Windows 工具安装诊断** (run $GITHUB_RUN_ID)"; echo '```';
               command -v choco python curl 2>&1; ls /tmp 2>&1 | head -20; echo '```'; } > /tmp/gh-body.md
-            gh issue comment 1 --body-file /tmp/gh-body.md 2>/dev/null || true
+            gh issue comment 1 --repo "$GH_REPO" --body-file /tmp/gh-body.md 2>/dev/null || true
             exit 1
           fi
       - name: 构建 xai-grok-pager (release)
@@ -165,7 +167,7 @@ jobs:
           if ! cargo build --release -p xai-grok-pager --target "${{ matrix.target }}" 2>/tmp/build-err.log; then
             { echo "**构建失败 ${{ matrix.target }}** (run $GITHUB_RUN_ID)"; echo '```';
               tail -60 /tmp/build-err.log; echo '```'; } > /tmp/gh-body.md
-            gh issue comment 1 --body-file /tmp/gh-body.md 2>/dev/null || true
+            gh issue comment 1 --repo "$GH_REPO" --body-file /tmp/gh-body.md 2>/dev/null || true
             exit 1
           fi
       - name: 收集二进制到 dist
@@ -180,7 +182,7 @@ jobs:
               echo "PWD=$PWD"; echo "--- target 目录树 ---";
               find "$PWD/target" -maxdepth 5 \( -type d -o -type f \) 2>&1 | head -80;
               echo '```'; } > /tmp/gh-body.md
-            gh issue comment 1 --body-file /tmp/gh-body.md 2>/dev/null || true
+            gh issue comment 1 --repo "$GH_REPO" --body-file /tmp/gh-body.md 2>/dev/null || true
             exit 1
           fi
           echo "::notice::找到二进制: ${BIN}"
