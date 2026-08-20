@@ -163,8 +163,9 @@ jobs:
           set -uo pipefail
           export CARGO_TERM_COLOR=never
           # 注意: 不要设 RUSTFLAGS 环境变量 —— 它会整体覆盖上游 .cargo/config.toml
-          # 里各平台的必需链接标志 (macOS -undefined dynamic_lookup, Windows +crt-static 等)
-          if ! cargo build --release -p xai-grok-pager --target "${{ matrix.target }}" 2>/tmp/build-err.log; then
+          # 里各平台的必需链接标志 (macOS -undefined dynamic_lookup, Windows +crt-static 等)。
+          # CLI 二进制 `xai-grok-pager` 由包 `xai-grok-pager-bin` 提供(其 src/main.rs 是唯一 [[bin]])。
+          if ! cargo build --release -p xai-grok-pager-bin --target "${{ matrix.target }}" 2>/tmp/build-err.log; then
             ERR="$(grep -aE '^error|error\[|failed to run|could not compile|panicked|LNK[0-9]+|fatal error|No space|out of memory|OOM|unsupported|not (found|exist)' /tmp/build-err.log | tail -10 | tr '\n' '~' | cut -c1-1500)"
             [ -n "$ERR" ] || ERR="$(tail -20 /tmp/build-err.log | tr '\n' '~' | cut -c1-1500)"
             echo "::error::BUILD_FAIL ${{ matrix.target }} :: ${ERR}"
