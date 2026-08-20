@@ -129,9 +129,11 @@ jobs:
         run: |
           curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
           mkdir -p /tmp/protoc
-          tar -xf /tmp/protoc.zip -C /tmp/protoc
+          python -m zipfile -e /tmp/protoc.zip /tmp/protoc
           echo "/tmp/protoc/bin" >> "$GITHUB_PATH"
-          choco install nasm -y --no-progress
+          choco install nasm -y --no-progress || true
+          protoc --version
+          nasm -v
       - name: 构建 xai-grok-pager (release)
         shell: bash
         env:
