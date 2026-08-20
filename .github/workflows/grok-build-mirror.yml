@@ -150,10 +150,9 @@ jobs:
           echo "/c/ProgramData/chocolatey/bin" >> "$GITHUB_PATH"
           protoc --version
           if ! nasm -v; then
-            { echo "**Windows 工具安装诊断** (run $GITHUB_RUN_ID)"; echo '```';
-              command -v choco python curl 2>&1; ls /tmp 2>&1 | head -20; echo '```'; } > /tmp/gh-body.md
-            jq -Rs '{body: .}' /tmp/gh-body.md > /tmp/gh-payload.json
-            curl -fsS -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" -o /tmp/gh-resp.json "https://api.github.com/repos/${GH_REPO}/issues/1/comments" --data-binary @/tmp/gh-payload.json || echo "::error::诊断评论失败 $(cat /tmp/gh-resp.json 2>/dev/null | head -c 200)"
+            { echo "**nasm 缺失 run=$GITHUB_RUN_ID ${{ matrix.target }}**"; echo; command -v choco python curl 2>&1; ls /tmp 2>&1 | head; } > /tmp/diag.txt
+            TR="$(tr '\n' '~' < /tmp/diag.txt | cut -c1-800)"
+            echo "::error::NASM_FAIL ${{ matrix.target }} :: ${TR}"
             exit 1
           fi
       - name: 构建 xai-grok-pager (release)
@@ -166,10 +165,11 @@ jobs:
           # 注意: 不要设 RUSTFLAGS 环境变量 —— 它会整体覆盖上游 .cargo/config.toml
           # 里各平台的必需链接标志 (macOS -undefined dynamic_lookup, Windows +crt-static 等)
           if ! cargo build --release -p xai-grok-pager --target "${{ matrix.target }}" 2>/tmp/build-err.log; then
-            { echo "**构建失败 ${{ matrix.target }}** (run $GITHUB_RUN_ID)"; echo '```';
-              tail -60 /tmp/build-err.log; echo '```'; } > /tmp/gh-body.md
-            jq -Rs '{body: .}' /tmp/gh-body.md > /tmp/gh-payload.json
-            curl -fsS -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" -o /tmp/gh-resp.json "https://api.github.com/repos/${GH_REPO}/issues/1/comments" --data-binary @/tmp/gh-payload.json || echo "::error::诊断评论失败 $(cat /tmp/gh-resp.json 2>/dev/null | head -c 200)"
+            ERR="$(tail -40 /tmp/build-err.log | tr '\n' '~' | cut -c1-1200)"
+            echo "::error::BUILD_FAIL ${{ matrix.target }} :: ${ERR}"
+            { echo "**构建失败 run=$GITHUB_RUN_ID ${{ matrix.target }}**"; echo; echo '~~~'; tail -80 /tmp/build-err.log; echo '~~~'; } > /tmp/diag.txt
+            jq -Rs '{message: "diag build", branch: "diagnostics", content: (. | @base64)}' /tmp/diag.txt > /tmp/put.json
+            curl -fsS -X PUT -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" -o /tmp/putresp.json "https://api.github.com/repos/${GH_REPO}/contents/diagnostics/build-${GITHUB_RUN_ID}.txt" --data-binary @/tmp/put.json || echo "::error::diag-push 失败"
             exit 1
           fi
       - name: 收集二进制到 dist
@@ -180,12 +180,11 @@ jobs:
           [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
           BIN="$(find "$PWD/target" -type f -name "xai-grok-pager${EXT}" -path "*/release/*" | head -1 || true)"
           if [ -z "$BIN" ]; then
-            { echo "**二进制未找到 ${{ matrix.target }}** (run $GITHUB_RUN_ID)"; echo '```';
-              echo "PWD=$PWD"; echo "--- target 目录树 ---";
-              find "$PWD/target" -maxdepth 5 \( -type d -o -type f \) 2>&1 | head -80;
-              echo '```'; } > /tmp/gh-body.md
-            jq -Rs '{body: .}' /tmp/gh-body.md > /tmp/gh-payload.json
-            curl -fsS -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" -o /tmp/gh-resp.json "https://api.github.com/repos/${GH_REPO}/issues/1/comments" --data-binary @/tmp/gh-payload.json || echo "::error::诊断评论失败 $(cat /tmp/gh-resp.json 2>/dev/null | head -c 200)"
+            { echo "**collect 失败 run=$GITHUB_RUN_ID ${{ matrix.target }}**"; echo; echo '~~~'; echo "PWD=$PWD"; find "$PWD/target" -maxdepth 5 \( -type d -o -type f \) 2>&1 | head -80; echo '~~~'; } > /tmp/diag.txt
+            TR="$(tr '\n' '~' < /tmp/diag.txt | cut -c1-1200)"
+            echo "::error::COLLECT_FAIL ${{ matrix.target }} :: ${TR}"
+            jq -Rs '{message: "diag collect", branch: "diagnostics", content: (. | @base64)}' /tmp/diag.txt > /tmp/put.json
+            curl -fsS -X PUT -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" -o /tmp/putresp.json "https://api.github.com/repos/${GH_REPO}/contents/diagnostics/collect-${GITHUB_RUN_ID}.txt" --data-binary @/tmp/put.json || echo "::error::diag-push 失败"
             exit 1
           fi
           echo "::notice::找到二进制: ${BIN}"
