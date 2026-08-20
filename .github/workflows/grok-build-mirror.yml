@@ -1,0 +1,177 @@
+name: grok-build-mirror
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"   # UTC，每 2h
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 上游 git ref（分支/commit，默认 main）
+        type: string
+        default: main
+      force:
+        description: 强制重建（即使上游 commit 无变化）
+        type: boolean
+        default: false
+      latest:
+        description: Latest 徽标处理
+        type: choice
+        default: auto
+        options: [auto, set, keep]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grok-build-mirror
+  cancel-in-progress: false
+
+jobs:
+  # ── 探测: 读上游版本 + commit，决定 create / refresh / skip ──────────────
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      action: ${{ steps.detect.outputs.action }}
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
+      head_sha: ${{ steps.detect.outputs.head_sha }}
+      head_short: ${{ steps.detect.outputs.head_short }}
+      head_date: ${{ steps.detect.outputs.head_date }}
+    steps:
+      - name: 检出上游源码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: xai-org/grok-build
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+      - name: 计算待构建版本与动作
+        id: detect
+        env:
+          FORCE: ${{ inputs.force }}   # schedule 时为 ''
+          GH_REPO: ${{ github.repository }}   # 关键: 锁定目标仓库, 避免 gh 指向上游
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          VERSION="$(jq -r '.version' crates/codegen/xai-grok-pager/npm/grok/package.json)"
+          TAG="$VERSION"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          HEAD_SHORT="$(git rev-parse --short=9 HEAD)"
+          HEAD_DATE="$(git log -1 --format=%cs)"
+          ACTION="create"
+          if gh release view "$TAG" --json body > /tmp/rel.json 2>/dev/null; then
+            PREV_SHA="$(jq -r '.body | capture("(?<sha>[0-9a-f]{40})").sha // empty' /tmp/rel.json)"
+            if [ "$FORCE" = "true" ]; then
+              ACTION="refresh"
+            elif [ -n "$PREV_SHA" ] && [ "$PREV_SHA" = "$HEAD_SHA" ]; then
+              ACTION="skip"
+            else
+              ACTION="refresh"
+            fi
+          fi
+          echo "detect: version=${VERSION} tag=${TAG} head=${HEAD_SHORT} action=${ACTION}"
+          echo "action=${ACTION}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "head_short=${HEAD_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "head_date=${HEAD_DATE}" >> "$GITHUB_OUTPUT"
+
+  # ── 构建: 6 平台矩阵，全部在 GitHub-hosted runner 上原生/交叉编译 ────────
+  build:
+    needs: detect
+    if: needs.detect.outputs.action != 'skip'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: grok-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: grok-linux-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: grok-darwin-x64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            asset: grok-darwin-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: grok-win32-x64.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset: grok-win32-arm64.exe
+    steps:
+      - name: 检出上游源码 (固定 commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: xai-org/grok-build
+          ref: ${{ needs.detect.outputs.head_sha }}
+          fetch-depth: 1
+      - name: 缓存 cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+      - name: rustup target
+        run: rustup target add ${{ matrix.target }}
+      - name: 安装 protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+      - name: 安装 protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: 安装 protoc + nasm (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-win64.zip
+          mkdir -p /tmp/protoc
+          tar -xf /tmp/protoc.zip -C /tmp/protoc
+          echo "/tmp/protoc/bin" >> "$GITHUB_PATH"
+          choco install nasm -y --no-progress
+      - name: 构建 xai-grok-pager (release)
+        shell: bash
+        env:
+          RUSTFLAGS: -C strip=symbols
+          CARGO_INCREMENTAL: 0
+        run: |
+          set -euo pipefail
+          cargo build --release -p xai-grok-pager --target "${{ matrix.target }}"
+      - name: 上传二进制
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.asset }}
+          path: target/${{ matrix.target }}/release/xai-grok-pager${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+
+  # ── 发布: 汇总 6 平台产物 → release create/refresh + Latest 徽标 ──────────
+  publish:
+    needs: [detect, build]
+    if: needs.detect.outputs.action != 'skip' && !cancelled() && !contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.detect.outputs.tag }}
+      VERSION: ${{ needs.detect.outputs.version }}
+      HEAD_SHA: ${{ needs.detect.outputs.head_sha }}
+      HEAD_SHORT: ${{ needs.detect.outputs.head_short }}
+      HEAD_DATE: ${{ needs.detect.outputs.head_date }}
+      FORCE: ${{ needs.detect.outputs.action == 'refresh' && 'true' || '' }}
+      LATEST: ${{ inputs.latest }}   # schedule 时为 '' → 脚本默认 auto
+      UPSTREAM_URL: https://github.com/xai-org/grok-build
+    steps:
+      - name: 检出本仓库 (publish 脚本)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+      - name: 下载 6 平台二进制
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 发布 / 刷新 release
+        run: bash scripts/publish.sh
