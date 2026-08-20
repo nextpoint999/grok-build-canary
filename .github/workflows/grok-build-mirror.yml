@@ -236,6 +236,8 @@ jobs:
     timeout-minutes: 30
     env:
       GH_REPO: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.detect.outputs.tag }}
       VERSION: ${{ needs.detect.outputs.version }}
       HEAD_SHA: ${{ needs.detect.outputs.head_sha }}
@@ -255,7 +257,9 @@ jobs:
           path: dist
           merge-multiple: true
       - name: 发布 / 刷新 release
-        run: bash scripts/publish.sh 2>&1 | tee /tmp/publish.out
+        run: |
+          set -o pipefail
+          bash scripts/publish.sh 2>&1 | tee /tmp/publish.out
       - name: 上传 publish 日志 (诊断用)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
