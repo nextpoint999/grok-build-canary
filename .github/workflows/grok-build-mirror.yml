@@ -163,6 +163,14 @@ jobs:
             echo "::error::NASM_FAIL ${{ matrix.target }} :: ${TR}"
             exit 1
           fi
+      - name: 打补丁修复 Windows 的 /dev/null (上游 xai-proto-build)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 上游 emit_rerun_if_changed 用 /dev/stdout + /dev/null，Windows 上必失败；跳过预扫描(不影响产物)。
+          python3 -c "p='crates/build/xai-proto-build/src/lib.rs'; s=open(p,encoding='utf-8').read(); old='let includes = Vec::from_iter(includes);'; new='if std::env::consts::OS == \"windows\" { return Ok(()); }\n        let includes = Vec::from_iter(includes);'; assert old in s, 'anchor not found'; open(p,'w',encoding='utf-8').write(s.replace(old,new,1)); print('patched')"
+          grep -n "return Ok" crates/build/xai-proto-build/src/lib.rs
       - name: 构建 xai-grok-pager (release)
         shell: bash
         env:
