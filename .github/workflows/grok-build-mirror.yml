@@ -2,7 +2,7 @@ name: grok-build-mirror
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # UTC，每 2h
+    - cron: "0 2 * * *"   # UTC，每天 1 次 (02:00)
   workflow_dispatch:
     inputs:
       ref:
