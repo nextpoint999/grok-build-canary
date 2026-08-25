@@ -54,7 +54,7 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           VERSION="$(jq -r '.version' crates/codegen/xai-grok-pager/npm/grok/package.json)"
-          TAG="$VERSION"
+          TAG="v$VERSION"   # 用户偏好: release tag/name 一律加 v 前缀 (如 v0.1.220-alpha.4)
           HEAD_SHA="$(git rev-parse HEAD)"
           HEAD_SHORT="$(git rev-parse --short=9 HEAD)"
           HEAD_DATE="$(git log -1 --format=%cs)"

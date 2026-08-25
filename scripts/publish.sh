@@ -32,7 +32,7 @@ fi
 ( cd "$BIN_DIR" && sha256sum ./grok-* > SHA256SUMS )
 
 NOTES="$(cat <<EOF
-xAI [grok-build](${UPSTREAM_URL:-https://github.com/xai-org/grok-build}) 的 GitHub Actions 镜像构建 — \`${VERSION}\`
+xAI [grok-build](${UPSTREAM_URL:-https://github.com/xai-org/grok-build}) 的 GitHub Actions 镜像构建 — \`${TAG}\`
 
 - 上游 commit: \`${HEAD_SHA}\` (\`${HEAD_SHORT}\`, ${HEAD_DATE})
 - 构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')
