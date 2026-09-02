@@ -32,12 +32,14 @@ fi
 ( cd "$BIN_DIR" && sha256sum ./grok-* > SHA256SUMS )
 
 NOTES="$(cat <<EOF
-xAI [grok-build](${UPSTREAM_URL:-https://github.com/xai-org/grok-build}) 的 GitHub Actions 镜像构建 — \`${TAG}\`
+xAI [grok-build](${UPSTREAM_URL:-https://github.com/xai-org/grok-build}) 的 GitHub Actions 镜像构建 — release tag: \`${TAG}\`
 
+- 上游版本: **\`${VERSION}\`**
 - 上游 commit: \`${HEAD_SHA}\` (\`${HEAD_SHORT}\`, ${HEAD_DATE})
-- 构建时间: $(date -u '+%Y-%m-%d %H:%M UTC')
+- 构建日期: $(date -u '+%Y-%m-%d')
+- 构建时间: $(date -u '+%H:%M UTC')
 - 平台 (6): linux x64/arm64 · darwin x64/arm64 · win32 x64/arm64
-- 触发: 每 2h 定时轮询上游 main；commit 变化时自动刷新本 release；也可 workflow_dispatch 手动构建
+- 触发: 每天 02:00 UTC 定时轮询上游 main；commit 变化时刷新当日 release；也可 workflow_dispatch 手动构建
 - 安装: 下载对应平台二进制（\`chmod +x\` 后直接运行）；官方渠道: \`curl -fsSL https://x.ai/cli/install.sh | bash\`
 EOF
 )"
