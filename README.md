@@ -6,10 +6,10 @@ xAI [grok-build](https://github.com/xai-org/grok-build)（SpaceXAI 终端编码�
 
 ## 特点
 
-- **定时**: 每 2h 轮询上游 `main`，有新 commit 自动构建并刷新 release
+- **定时**: 每天 02:00 UTC 轮询上游 `main`，有新 commit 自动构建
 - **多架构**: linux / darwin / win32 × arm64 / x64，共 6 平台（与上游 npm 平台包一致）
-- **版本**: release tag/name 为上游 npm 元包版本加 `v` 前缀（如 `v0.1.220-alpha.4`）；release body 记录上游 commit SHA
-- **自动刷新**: 上游 commit 变化时原位刷新同一 release 的二进制（tag 不变，Latest 徽标不回退）
+- **版本**: release tag/name 为构建日期加 `v` 前缀（如 `v2026.9.2`），每天均产出新 release 且 Latest 徽标自动前移
+- **信息追踪**: release body 记录上游 npm 元包版本号 + 上游 commit SHA（完整/短 SHA 及日期）
 - 二进制构建尊重上游 `.cargo/config.toml` 的平台链接标志（Linux 额外 strip 减体积；macOS/Windows 与上游一致不 strip）
 
 ## 安装
@@ -43,5 +43,5 @@ Actions 页面 → **Run workflow**：
 
 ## 说明
 
-- 上游 `xai-org/grok-build` 不发布 GitHub Releases，也不开放构建流程（内部 CI）；本仓库按上游 npm 包 `@xai-official/grok` 的版本号 + 提交 SHA 追踪构建。
+- 上游 `xai-org/grok-build` 不发布 GitHub Releases，也不开放构建流程（内部 CI）；本仓库按上游 npm 元包 `grok` 的版本号 + 提交 SHA 追踪构建，版本号以发布日期标记。
 - 上游仓库 LICENSE: Apache-2.0。
