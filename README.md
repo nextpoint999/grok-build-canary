@@ -8,7 +8,7 @@ xAI [grok-build](https://github.com/xai-org/grok-build)（SpaceXAI 终端编码�
 
 - **定时**: 每天 02:00 UTC 轮询上游 `main`，有新 commit 自动构建
 - **多架构**: linux / darwin / win32 × arm64 / x64，共 6 平台（与上游 npm 平台包一致）
-- **版本**: release tag/name 为构建日期加 `v` 前缀（如 `v2026.9.2`），每天均产出新 release 且 Latest 徽标自动前移
+- **版本**: release tag/name 为构建日期加 `v` 前缀（如 `v2026.9.2`）；仅当上游有更新时产出新 release，Latest 徽标随之前移，上游未变化则 skip 不构建
 - **信息追踪**: release body 记录上游 npm 元包版本号 + 上游 commit SHA（完整/短 SHA 及日期）
 - 二进制构建尊重上游 `.cargo/config.toml` 的平台链接标志（Linux 额外 strip 减体积；macOS/Windows 与上游一致不 strip）
 

@@ -50,27 +50,35 @@ jobs:
         env:
           FORCE: ${{ inputs.force }}   # schedule 时为 ''
           GH_REPO: ${{ github.repository }}   # 关键: 锁定目标仓库, 避免 gh 指向上游
+          GH_TOKEN: ${{ github.token }}   # detect 需要读本仓库 release 记录的上游 commit
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
           VERSION="$(jq -r '.version' crates/codegen/xai-grok-pager/npm/grok/package.json)"
           RELEASE_DATE="$(date -u +%Y.%-m.%-d)"
-          TAG="v$RELEASE_DATE"   # 用户偏好: tag = v<release日期> (如 v2026.9.2)；日期每天变化→每天出新 release/latest
+          TAG="v$RELEASE_DATE"   # tag = v<release日期> (如 v2026.9.2)
           HEAD_SHA="$(git rev-parse HEAD)"
           HEAD_SHORT="$(git rev-parse --short=9 HEAD)"
           HEAD_DATE="$(git log -1 --format=%cs)"
-          ACTION="create"
-          if gh release view "$TAG" --json body > /tmp/rel.json 2>/dev/null; then
-            PREV_SHA="$(jq -r '.body | capture("(?<sha>[0-9a-f]{40})").sha // empty' /tmp/rel.json)"
-            if [ "$FORCE" = "true" ]; then
-              ACTION="refresh"
-            elif [ -n "$PREV_SHA" ] && [ "$PREV_SHA" = "$HEAD_SHA" ]; then
-              ACTION="skip"
-            else
-              ACTION="refresh"
-            fi
+          # ── 上游是否已更新: 对比最近一个 release body 记录的上游 commit ──
+          # 若最近一次发布的上游 commit 与当前上游 HEAD 相同 → 上游没变化 → skip
+          LAST_SHA=""
+          API_URL="https://api.github.com/repos/$GH_REPO/releases?per_page=10"
+          if LAST_JSON="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$API_URL" 2>/dev/null)"; then
+            LAST_SHA="$(printf '%s' "$LAST_JSON" | python3 -c "import json,sys,re; rels=json.load(sys.stdin); rels=[r for r in rels if not r.get('draft')]; rels.sort(key=lambda x: x.get('published_at') or '', reverse=True); body=rels[0].get('body') or '' if rels else ''; m=re.search(r'[0-9a-f]{40}', body); print(m.group(0) if m else '')")"
           fi
-          echo "detect: version=${VERSION} tag=${TAG} head=${HEAD_SHORT} action=${ACTION}"
+
+          ACTION="create"
+          if [ "$FORCE" = "true" ]; then
+            ACTION="refresh"
+          elif [ -n "$LAST_SHA" ] && [ "$LAST_SHA" = "$HEAD_SHA" ]; then
+            ACTION="skip"   # 上游无新 commit → 不构建
+          elif gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            ACTION="refresh"   # 上游已更新; 当日 tag 已存在 → 刷新
+          else
+            ACTION="create"    # 上游已更新; 当日 tag 不存在 → 新建
+          fi
+          echo "detect: version=${VERSION} tag=${TAG} head=${HEAD_SHORT} last_built=${LAST_SHA:0:9} action=${ACTION}"
           echo "action=${ACTION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
